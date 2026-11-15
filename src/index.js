@@ -36,7 +36,7 @@ export class OctoPlayer extends Events {
     this.volume = Math.max(0, Math.min(1, finite(options.volume, 1)));
     this.muted = Boolean(options.muted); this.playbackRate = finite(options.playbackRate, 1);
     this.generation = 0; this.controller = null; this.fallbackTask = null; this.transportIntent = 0; this._desiredPlaying = false;
-    this.history = []; this.warnings = []; this.metadata = {}; this.latestStats = null;
+    this.history = []; this.warnings = []; this.metadata = {}; this.latestStats = null; this._reportedError = null;
     this._retired = Promise.resolve(); this._seekQueue = Promise.resolve();
     this.timer = setInterval(() => this._sample(), Math.max(250, this.options.statsIntervalMs));
   }
@@ -53,6 +53,13 @@ export class OctoPlayer extends Events {
     if (this.warnings.length > 50) this.warnings.shift();
     this.emit('warning', warning);
   }
+  _reportError(detail) {
+    this._setState('error');
+    const error = detail.error || detail;
+    if (this._reportedError === error) return;
+    this._reportedError = error;
+    this.emit('error', detail);
+  }
 
   async load(value, { startTime = 0 } = {}) {
     this._assertLive();
@@ -66,7 +73,7 @@ export class OctoPlayer extends Events {
     // Drain previous workers before opening the next instance. Superseded loads are aborted.
     this._retired = this._retired.catch(() => {}).then(() => oldEngine?.destroy());
     this.source = source; this.metadata = {}; this.history = []; this.warnings = [];
-    this.latestStats = null; this.monitor.reset(); this._setState('loading');
+    this.latestStats = null; this._reportedError = null; this.monitor.reset(); this._setState('loading');
     try {
       await this._retired;
       throwIfAborted(signal);
@@ -97,7 +104,7 @@ export class OctoPlayer extends Events {
     } catch (error) {
       if (signal.aborted || generation !== this.generation) throw abortError();
       if (this.engine) { await this.engine.destroy().catch(() => {}); this.engine = null; }
-      this._setState('error'); this.emit('error', errorDetail(error)); throw error;
+      this._reportError(errorDetail(error)); throw error;
     }
   }
 
@@ -137,6 +144,7 @@ export class OctoPlayer extends Events {
   }
 
   _engineEvent(type, detail) {
+    if (this.state === 'error' && ['playing', 'pause', 'buffering', 'waiting', 'seeking', 'seeked', 'ended'].includes(type)) return;
     switch (type) {
       case 'metadata': case 'loadedmetadata':
         this.metadata = { ...this.metadata, ...detail }; this.emit('metadata', this.metadata); return;
@@ -152,7 +160,7 @@ export class OctoPlayer extends Events {
         if (this.options.mode === 'auto' && this.engine?.name === 'native') {
           this._runtimeFallback(detail).catch(() => {}); return;
         }
-        this._setState('error'); break;
+        this._reportError(detail); return;
       }
     }
     this.emit(type, detail);
@@ -172,7 +180,7 @@ export class OctoPlayer extends Events {
         this._setState('ready');
         if (shouldPlay && this._desiredPlaying) await this.play();
       } catch (error) {
-        if (!signal.aborted) { this._setState('error'); this.emit('error', errorDetail(error)); }
+        if (!signal.aborted) this._reportError(errorDetail(error));
         throw error;
       } finally { if (this.fallbackTask === task) this.fallbackTask = null; }
     })();
@@ -182,6 +190,7 @@ export class OctoPlayer extends Events {
 
   async play() {
     this._assertLive();
+    if (this.state === 'error' && this._reportedError) throw this._reportedError;
     if (!this.engine) throw new Error('Load a source before calling play()');
     const engine = this.engine; const generation = this.generation; const intent = ++this.transportIntent;
     this._desiredPlaying = true;
@@ -199,11 +208,12 @@ export class OctoPlayer extends Events {
         if (generation !== this.generation || this.destroyed) throw abortError();
         if (this._desiredPlaying) { await this.engine.play(); this._setState('playing'); }
         return;
-      } else { this.emit('error', errorDetail(error)); }
+      } else { this._reportError(errorDetail(error)); }
       throw error;
     }
   }
   async pause() {
+    if (this.state === 'error' && this._reportedError) throw this._reportedError;
     this._assertLive(); const intent = ++this.transportIntent; this._desiredPlaying = false;
     const engine = this.engine;
     if (!engine) return;
@@ -212,6 +222,7 @@ export class OctoPlayer extends Events {
   }
   seek(seconds) {
     this._assertLive();
+    if (this.state === 'error' && this._reportedError) return Promise.reject(this._reportedError);
     if (!Number.isFinite(seconds)) return Promise.reject(new TypeError('Seek time must be finite'));
     const generation = this.generation;
     if (!this.engine) return Promise.reject(new Error('Load a source before seeking'));

@@ -99,6 +99,15 @@ exactly once. The deployed `vendor/libmedia/manifest.json` records both that
 input hash and the output hash; changing upstream versions requires a new
 review, not a best-effort patch.
 
+Two demuxer chunks also receive allocation-site fixes and require these exact
+original SHA-256 hashes; their original and patched hashes appear in the same
+deployment manifest:
+
+| Chunk | Original SHA-256 |
+| --- | --- |
+| `573.avplayer.js` (Matroska/WebM) | `ffcedb0645e22f598bb5b9b322fa24cdd3dec51a7ad992061defd186a946974d` |
+| `943.avplayer.js` (MP4) | `b600831c9ab77fcbf5db6e9786d5ceb566071c344f243c0908fcd154c3599e78` |
+
 The changes are deliberately limited:
 
 1. An explicit WASM benchmark mode cannot silently select MSE. Upstream normally
@@ -129,6 +138,21 @@ The changes are deliberately limited:
    Cross-origin-isolated video decoding stays in its separate Worker. Without
    shared memory and without Worker WebGL, upstream needs to keep video decode
    and render together on the main thread; audio and IO can still use Workers.
+7. Matroska/WebM block payloads and ordinary MP4 media samples allocate an
+   additional 64 bytes and zero that tail, as required by FFmpeg's input-buffer
+   padding contract. The upstream allocation reserved only the payload size
+   while its AVBuffer metadata claimed the padding existed. This fix keeps
+   payload sizes and pointer identity unchanged, including MP4's asynchronous
+   read into the newly allocated buffer. It does not globally reallocate data
+   in `addAVPacketData`, where callers can still hold the original pointer.
+8. A negative video pipeline result other than end-of-file emits a terminal
+   `DecodeError` through the existing renderer control channel. The adapter
+   pauses audio/video and preserves its failed state rather than silently
+   ending video while audio continues. With `debug: true`, diagnostics contain
+   at most the first 12 video packet records plus a later failed packet: size,
+   timestamps, flags, return code, zero-padding status and SHA-256 for payloads
+   up to 1 MiB. Temporary hash copies are discarded; packet contents are never
+   exported or logged. This instrumentation is disabled by default.
 
 URLs with no recognizable filename extension use the demuxer's file-content
 probe (`ext: 'bin'`), bypassing upstream's separate playlist-guessing request.

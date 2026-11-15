@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
-import { patchLibmedia, sha256, ORIGINAL_SHA256, PATCH_VERSION } from './patch-libmedia.mjs';
+import { patchLibmedia, patchLibmediaChunk, sha256, ORIGINAL_SHA256, CHUNK_SHA256, PATCH_VERSION } from './patch-libmedia.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const manifest = JSON.parse(await readFile(path.join(root, 'scripts/libmedia-assets.json'), 'utf8'));
@@ -21,6 +21,7 @@ for (const name of await readdir(path.join(packageRoot, 'dist/esm'))) {
   if (!name.endsWith('.js')) continue;
   let bytes = await readFile(path.join(packageRoot, 'dist/esm', name));
   if (name === 'avplayer.js') bytes = Buffer.from(patchLibmedia(bytes.toString('utf8')));
+  else if (CHUNK_SHA256[name]) bytes = Buffer.from(patchLibmediaChunk(name, bytes.toString('utf8')));
   await writeFile(path.join(destination, name), bytes);
   jsFiles.push({ path: name, bytes: bytes.length, sha256: sha256(bytes) });
 }
@@ -87,6 +88,7 @@ await writeFile(path.join(destination, 'manifest.json'), `${JSON.stringify({
   revision: manifest.revision,
   patchVersion: PATCH_VERSION,
   originalJavaScriptSha256: ORIGINAL_SHA256,
+  originalChunkSha256: CHUNK_SHA256,
   javascript: jsFiles,
   wasm: wasmFiles,
 }, null, 2)}\n`);

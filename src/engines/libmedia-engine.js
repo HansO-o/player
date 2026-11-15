@@ -84,6 +84,7 @@ export class LibmediaEngine {
     this._pendingSeek = null;
     this._metadata = { duration: 0, width: 0, height: 0, hasAudio: false, hasVideo: false, streams: [], sourceFps: null };
     this._decodeStatus = null;
+    this._terminalError = null;
     this._renderer = null;
     this._workerGraphics = null;
     this._decodeStatusPending = false;
@@ -99,10 +100,28 @@ export class LibmediaEngine {
 
   _assertActive() {
     if (this._destroyed || this.signal?.aborted) throw abortError();
+    if (this._terminalError) throw this._terminalError;
   }
 
   _notify(type, detail = {}) {
+    if (this._terminalError && ['playing', 'buffering', 'pause', 'ended', 'seeking', 'seeked', 'ready'].includes(type)) return;
     if (!this._destroyed && !this.signal?.aborted) this.emit(type, detail);
+  }
+
+  _fail(error) {
+    if (this._terminalError || this._destroyed || this.signal?.aborted) return;
+    this._terminalError = error;
+    this._paused = true;
+    // Preserve the failed state while the existing transport operation settles.
+    // In particular, a bad video packet must not leave its audio playing alone.
+    this._notify('error', { error, code: error.code || error.name, message: error.message, engine: 'libmedia', terminal: true });
+    const stop = this._transport.catch(() => {}).then(async () => {
+      if (!this._destroyed && this.player) await this.player.pause();
+      this._paused = true;
+      this._pollDecodeStatus(true);
+    });
+    this._transport = stop;
+    stop.catch(() => {});
   }
 
   _enqueue(operation) {
@@ -164,6 +183,7 @@ export class LibmediaEngine {
       preLoadTime: Math.max(0.25, Math.min(8, this.options.bufferTarget ?? 1.5)),
       audioWorkletBufferLength: Math.max(8, Math.min(48, this.options.audioWorkletBufferLength ?? 24)),
       octoThreadCount: Number.isFinite(this.options.threadCount) ? Math.max(1, Math.floor(this.options.threadCount)) : undefined,
+      octoPacketDiagnostics: !!this.options.debug,
       octoForceWasm: wasmOnly,
     };
     if (wasmOnly || this.options.enableMSE === false) configuration.checkUseMSE = () => false;
@@ -230,7 +250,7 @@ export class LibmediaEngine {
     };
     listen('playing', () => this._notify('buffering', { reason: 'decoder-start' }));
     listen('played', () => {
-      this._paused = false;
+      if (!this._terminalError) this._paused = false;
       this._notify('playing', { engine: 'libmedia' });
       this._pollDecodeStatus(true);
     });
@@ -248,7 +268,7 @@ export class LibmediaEngine {
     listen('streamUpdate', () => { this._readMetadata(); this._notify('loadedmetadata', this._metadata); });
     listen('error', (value) => {
       const error = value instanceof Error ? value : new Error(String(value?.message || value || 'WASM engine error'));
-      this._notify('error', { error, message: error.message, engine: 'libmedia' });
+      this._fail(error);
     });
     listen('timeout', () => this._notify('buffering', { reason: 'source-timeout' }));
   }
@@ -357,7 +377,7 @@ export class LibmediaEngine {
   getAudioOutputNode() { return this.player?.getAudioOutputNode() || null; }
 
   _pollDecodeStatus(force = false) {
-    if (this._destroyed || !this._started || this._decodeStatusPending || !this.player?.VideoDecoderThread) return;
+    if (this._destroyed || this._decodeStatusPending || !this.player?.VideoDecoderThread) return;
     const now = performance.now();
     if (!force && now - this._lastStatusPoll < 1000) return;
     this._lastStatusPoll = now;
@@ -412,6 +432,8 @@ export class LibmediaEngine {
       droppedFrames: quality ? quality.droppedVideoFrames : number(stats.videoFrameDropCount),
       droppedPackets: number(stats.videoDropPacketCount),
       decodeErrors: number(stats.videoDecodeErrorPacketCount),
+      terminalError: this._terminalError ? { name: this._terminalError.name, code: this._terminalError.code ?? null, message: this._terminalError.message } : null,
+      packetDiagnostics: this.options.debug ? this._decodeStatus?.packetDiagnostics ?? null : null,
       bufferedSeconds: bufferedParts.length ? Math.max(0, Math.min(...bufferedParts)) : null,
       bufferMeasurement: 'compressed-packet-queue-estimate',
       avDriftMs: this._metadata.hasAudio && this._metadata.hasVideo ? (videoTime - audioTime) * 1000 : null,
