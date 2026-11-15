@@ -6,6 +6,8 @@
  * caller explicitly asks to benchmark WASM. It remains a replaceable external
  * LGPL component under assetBase (including its split worker modules).
  */
+import { probeWorkerWebGL } from './worker-render-support.js';
+
 const moduleLoads = new Map();
 const pipelineCleanup = new WeakMap();
 
@@ -16,6 +18,39 @@ function number(value, fallback = 0) {
 
 function abortError() {
   return new DOMException('Playback operation was aborted', 'AbortError');
+}
+
+function waitForAudio(context, resume, signal, timeout = 2000) {
+  if (context?.state === 'running') return Promise.resolve(true);
+  if (!context) return Promise.resolve(false);
+  return new Promise((resolve, reject) => {
+    let timer;
+    const cleanup = () => {
+      clearTimeout(timer);
+      context.removeEventListener('statechange', check);
+      signal?.removeEventListener('abort', aborted);
+    };
+    const done = (running) => { cleanup(); resolve(running); };
+    const check = () => { if (context.state === 'running') done(true); };
+    const aborted = () => { cleanup(); reject(abortError()); };
+    context.addEventListener('statechange', check);
+    signal?.addEventListener('abort', aborted, { once: true });
+    timer = setTimeout(() => done(context.state === 'running'), timeout);
+    if (signal?.aborted) { aborted(); return; }
+    Promise.resolve(resume).then(check, () => done(false));
+    check();
+  });
+}
+
+function fileExtension(source) {
+  if (source.ext) return source.ext.replace(/^\./, '').toLowerCase();
+  const extension = source.name?.split('.').pop()?.toLowerCase();
+  if (/^(mp4|mov|m4v|m4a|webm|mkv|hevc|h265|h264|ivf|aac|mp3|opus|ogg|flac|wav|m3u8|mpd|ts)$/.test(extension || '')) return extension;
+  if (/mpegurl/i.test(source.mime)) return 'm3u8';
+  if (/dash\+xml/i.test(source.mime)) return 'mpd';
+  // Unknown file URLs are sniffed by the demuxer. A nonempty generic extension
+  // bypasses upstream's separate, uncancellable playlist-guessing fetch.
+  return 'bin';
 }
 
 function loadModule(assetBase) {
@@ -50,6 +85,7 @@ export class LibmediaEngine {
     this._metadata = { duration: 0, width: 0, height: 0, hasAudio: false, hasVideo: false, streams: [], sourceFps: null };
     this._decodeStatus = null;
     this._renderer = null;
+    this._workerGraphics = null;
     this._decodeStatusPending = false;
     this._lastStatusPoll = 0;
     this._firstAudioRendered = false;
@@ -57,6 +93,8 @@ export class LibmediaEngine {
     this._resizeObserver = null;
     this._transport = Promise.resolve();
     this._rawLoad = null;
+    this._loadAbortReason = null;
+    this._abortListener = () => { this._abortIO().catch(() => {}); };
   }
 
   _assertActive() {
@@ -77,6 +115,31 @@ export class LibmediaEngine {
     // the returned promise still rejects normally for that caller.
     result.catch(() => {});
     return result;
+  }
+
+  async _abortIO(reason = abortError()) {
+    this._loadAbortReason ||= reason;
+    const player = this.player;
+    if (!player) return;
+    // The local flag covers cancellation before the IO task exists. The scoped
+    // RPC aborts the source without deleting its IPC or shared-memory structs;
+    // pending load/read calls settle before destroy releases those structures.
+    player.octoAbortRequested = true;
+    if (this.AVPlayer.IOThread) {
+      await this.AVPlayer.IOThread.octoAbortTask(player.taskId).catch(() => {});
+    }
+  }
+
+  async _translateLoadError(error) {
+    if (this._loadAbortReason || this.signal?.aborted) return this._loadAbortReason || abortError();
+    let timer;
+    // Diagnostics may be unavailable after a worker fault. This bound applies
+    // only to a read-only status query, never to shared-memory destruction.
+    const state = await Promise.race([
+      Promise.resolve().then(() => this.AVPlayer.IOThread?.octoGetIOStatus(this.player.taskId)).catch(() => null),
+      new Promise((resolve) => { timer = setTimeout(() => resolve(null), 500); }),
+    ]).finally(() => clearTimeout(timer));
+    return state?.timedOut ? new DOMException('Media HTTP request or body read timed out.', 'TimeoutError') : error;
   }
 
   async load(source, { startTime = 0 } = {}) {
@@ -105,19 +168,36 @@ export class LibmediaEngine {
     };
     if (wasmOnly || this.options.enableMSE === false) configuration.checkUseMSE = () => false;
     this.player = new AVPlayer(configuration);
+    this.signal?.addEventListener('abort', this._abortListener, { once: true });
+    this._assertActive();
     this._connectEvents();
     this.player.setVolume(this._muted ? 0 : this._volume, true);
     this.player.setPlaybackRate(this._rate);
     const loadOptions = {
       isLive: false,
-      ioLoaderOptions: { retryCount: 2, retryInterval: 0.25 },
-      ...(source.ext ? { ext: source.ext } : {}),
+      ioLoaderOptions: { retryCount: 2, retryInterval: 0.25, octoFetchTimeoutMs: this.options.fetchTimeoutMs ?? 15000 },
+      ext: fileExtension(source),
       ...(source.headers || source.credentials ? { http: { headers: source.headers, credentials: source.credentials } } : {}),
     };
-    this._rawLoad = this.player.load(source.input, loadOptions);
-    await this._rawLoad;
+    const input = source.input instanceof Blob && !(source.input instanceof File)
+      ? new File([source.input], `${source.name || 'local-video'}.${fileExtension(source)}`, { type: source.mime || source.input.type })
+      : source.input;
+    this._rawLoad = this.player.load(input, loadOptions);
+    try { await this._rawLoad; }
+    catch (error) { throw await this._translateLoadError(error); }
     this._assertActive();
     this._readMetadata();
+    if (this._metadata.hasVideo) {
+      this._workerGraphics = await probeWorkerWebGL();
+      this._assertActive();
+      this.AVPlayer.Util.setWorkerRendererSupported(this._workerGraphics.supported);
+      if (!this._workerGraphics.supported) {
+        this._notify('warning', {
+          code: 'MAIN_THREAD_VIDEO_RENDERER',
+          message: 'Worker 内没有可用的 WebGL，改用主线程 GPU 渲染；跨源隔离启用时视频解码仍保留在 Worker。',
+        });
+      }
+    }
     if (wasmOnly && this._metadata.hasVideo) {
       const probe = document.createElement('canvas');
       const context = probe.getContext('webgl') || probe.getContext('webgl2');
@@ -215,7 +295,7 @@ export class LibmediaEngine {
     // its context only after asynchronous worker/decoder setup, too late for
     // Firefox/Safari's transient user activation. Its normal startAudioPipeline
     // still installs the worklet exactly once on this shared context.
-    if (this._metadata.hasAudio && !this.AVPlayer.audioContext) {
+    if (this._metadata.hasAudio && (!this.AVPlayer.audioContext || this.AVPlayer.audioContext.state === 'closed')) {
       const Context = globalThis.AudioContext || globalThis.webkitAudioContext;
       if (Context) this.AVPlayer.audioContext = new Context();
     }
@@ -228,7 +308,7 @@ export class LibmediaEngine {
       if (this._pendingSeek > 0) await this.player.seek(BigInt(Math.round(this._pendingSeek * 1000)));
       this._pendingSeek = null;
       this._paused = false;
-      if (!this.player.isMSE() && this._metadata.hasAudio && this.AVPlayer.audioContext?.state !== 'running') {
+      if (!this.player.isMSE() && this._metadata.hasAudio && !await waitForAudio(this.AVPlayer.audioContext, contextResume, this.signal)) {
         await this.player.pause();
         this._paused = true;
         throw new DOMException('Click play to allow the browser to start audio output.', 'NotAllowedError');
@@ -320,6 +400,7 @@ export class LibmediaEngine {
       hardwareAcceleration: this._decodeStatus?.hardwarePreference || null,
       renderer: mse ? 'native' : this._renderer,
       rendererPreference: this.options.renderer || 'auto',
+      workerGraphics: this._workerGraphics,
       threads: decoder === 'wasm' ? (this._decodeStatus?.threads ?? null) : null,
       requestedThreads: this.options.threadCount ?? null,
       sharedMemory: !!globalThis.crossOriginIsolated && typeof SharedArrayBuffer !== 'undefined',
@@ -360,7 +441,9 @@ export class LibmediaEngine {
     this._destroyed = true;
     this._paused = true;
     this._resizeObserver?.disconnect();
+    this.signal?.removeEventListener('abort', this._abortListener);
     if (this.player) {
+      await this._abortIO();
       // Upstream does not permit destruction while a transport RPC is still
       // mutating its shared memory. Complete those RPCs before releasing it.
       await this._transport.catch(() => {});

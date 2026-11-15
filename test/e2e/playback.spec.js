@@ -147,11 +147,15 @@ test(`${mode} pause, keyframe seek, resume and volume keep audio/video operation
     await window.player.seek(2.4);
     window.player.setMuted(false);
   });
+  const framesAtSeek = (await stats(page)).renderedFrames;
   await page.locator('#play').click();
   await page.evaluate(() => window.__playPromise);
   await expect.poll(() => page.evaluate(() => window.player.currentTime)).toBeGreaterThan(2.5);
-  if (mode === 'wasm') await expect.poll(() => page.evaluate(() => window.__audioPeak)).toBeGreaterThan(0.001);
-  await attachEvidence(page, testInfo, { mode, seekTarget: 2.4, pausedAt });
+  if (mode === 'wasm') {
+    await expect.poll(() => page.evaluate(() => window.__audioPeak)).toBeGreaterThan(0.001);
+    await expect.poll(async () => (await stats(page)).renderedFrames).toBeGreaterThan(framesAtSeek + 3);
+  }
+  await attachEvidence(page, testInfo, { mode, seekTarget: 2.4, pausedAt, framesAtSeek });
 });
 }
 
@@ -159,7 +163,9 @@ test('a local File is decoded without uploading it', async ({ page }, testInfo) 
   await prepare(page);
   const externalRequests = [];
   page.on('request', request => {
-    if (!new URL(request.url()).hostname.match(/^(127\.0\.0\.1|localhost)$/)) externalRequests.push(request.url());
+    const url = new URL(request.url());
+    // blob: Workers and data: resources are local, not outbound HTTP requests.
+    if (['http:', 'https:'].includes(url.protocol) && !/^(127\.0\.0\.1|localhost)$/.test(url.hostname)) externalRequests.push(request.url());
   });
   await page.evaluate(async () => {
     const response = await fetch('/fixtures/av1-opus.webm');

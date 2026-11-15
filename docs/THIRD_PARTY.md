@@ -113,6 +113,28 @@ The changes are deliberately limited:
    thread count and active renderer context. A failed/unavailable diagnostic
    returns an unknown value and does not interrupt playback. WebCodecs
    `prefer-hardware` remains a **preference**, not proof of physical hardware use.
+4. The media FetchIOLoader has a scoped header/read-idle timeout (15 seconds by
+   default, configurable with `fetchTimeoutMs`). Each successful network read
+   resets the idle deadline, so this is not a maximum movie duration. A timeout
+   aborts the actual request; the adapter never replaces global `fetch`.
+5. Cancellation aborts an IO task without deleting its IPC channel. This also
+   fixes an upstream `abort()` early return that previously failed to abort a
+   request waiting for headers. The original demux operation is allowed to
+   settle before the adapter releases its shared memory. Cancellation gates
+   cover the interval before an IO task has been registered.
+6. A real transferred-canvas Worker probe checks WebGL clear/readback rather
+   than assuming that `OffscreenCanvas` API presence implies Worker graphics
+   support. If the probe fails, a scoped capability setter enables upstream's
+   existing main-thread renderer and prevents an unusable canvas transfer.
+   Cross-origin-isolated video decoding stays in its separate Worker. Without
+   shared memory and without Worker WebGL, upstream needs to keep video decode
+   and render together on the main thread; audio and IO can still use Workers.
+
+URLs with no recognizable filename extension use the demuxer's file-content
+probe (`ext: 'bin'`), bypassing upstream's separate playlist-guessing request.
+For HLS/DASH URLs with opaque paths, supply `ext: 'm3u8'` / `ext: 'mpd'` or the
+correct MIME type. Media fetch cancellation does not cancel the browser's ES
+module import or compilation of already-requested WASM engine resources.
 
 The audio master clock, FFmpeg dependency handling, AV1 reference frames and
 upstream adaptive non-reference-frame discard remain intact. There is no
@@ -123,6 +145,8 @@ can increase memory use, thermal throttling and scheduling overhead.
 ## Graphics and audio behavior
 
 WASM YUV frames use WebGPU or WebGL; WebCodecs frames can also use Canvas2D.
+The GPU context can run on the main thread when Worker graphics are unavailable;
+the diagnostic `workerGraphics` records the actual probe outcome.
 This upstream release does **not** provide a scalar YUV-to-Canvas2D fallback
 when both WebGL and WebGPU are disabled. A headless browser without a working
 graphics context therefore cannot validate the WASM video path, even if it can
@@ -135,6 +159,13 @@ The adapter requests the audio master clock and preserves unplayed audio when
 video presentation falls behind. It exports actual decoded/rendered audio
 frame counters and the AudioContext state for functional testing. MSE counters
 that cannot prove decoding are reported as `null`.
+
+The first AudioContext is created/resumed synchronously in the caller's play
+gesture, before asynchronous worker setup. The adapter allows up to two seconds
+for the audio backend to enter `running`; a denied or unavailable audio backend
+pauses and reports `NotAllowedError` rather than silently claiming audible
+playback. Destroying the final player stops shared pipelines and closes the
+captured AudioContext; new instances wait for that cleanup before starting.
 
 ## License texts
 

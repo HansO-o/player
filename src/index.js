@@ -35,7 +35,7 @@ export class OctoPlayer extends Events {
     this.engine = null; this.source = null; this.state = 'idle'; this.destroyed = false;
     this.volume = Math.max(0, Math.min(1, finite(options.volume, 1)));
     this.muted = Boolean(options.muted); this.playbackRate = finite(options.playbackRate, 1);
-    this.generation = 0; this.controller = null; this.fallbackTask = null; this.transportIntent = 0;
+    this.generation = 0; this.controller = null; this.fallbackTask = null; this.transportIntent = 0; this._desiredPlaying = false;
     this.history = []; this.warnings = []; this.metadata = {}; this.latestStats = null;
     this._retired = Promise.resolve(); this._seekQueue = Promise.resolve();
     this.timer = setInterval(() => this._sample(), Math.max(250, this.options.statsIntervalMs));
@@ -58,7 +58,7 @@ export class OctoPlayer extends Events {
     this._assertLive();
     const source = normalizeSource(value);
     const generation = ++this.generation;
-    ++this.transportIntent; this.fallbackTask = null;
+    ++this.transportIntent; this._desiredPlaying = false; this.fallbackTask = null;
     this.controller?.abort();
     this.controller = new AbortController();
     const signal = this.controller.signal;
@@ -170,7 +170,7 @@ export class OctoPlayer extends Events {
         await this._openEngine('libmedia', this.source, { generation, signal, startTime, reason: detail.code || 'native-runtime-error' });
         throwIfAborted(signal);
         this._setState('ready');
-        if (shouldPlay) await this.play();
+        if (shouldPlay && this._desiredPlaying) await this.play();
       } catch (error) {
         if (!signal.aborted) { this._setState('error'); this.emit('error', errorDetail(error)); }
         throw error;
@@ -184,27 +184,31 @@ export class OctoPlayer extends Events {
     this._assertLive();
     if (!this.engine) throw new Error('Load a source before calling play()');
     const engine = this.engine; const generation = this.generation; const intent = ++this.transportIntent;
+    this._desiredPlaying = true;
     try {
       await engine.play();
       if (this.destroyed || generation !== this.generation || engine !== this.engine) throw abortError();
-      if (intent !== this.transportIntent) { await engine.pause(); return; }
+      if (intent !== this.transportIntent) { if (!this._desiredPlaying) await engine.pause(); return; }
       this._setState('playing');
     } catch (error) {
       if (this.destroyed || generation !== this.generation || engine !== this.engine || error.name === 'AbortError') throw abortError();
       if (error.name === 'NotAllowedError') {
         this._setState('paused'); this._warning({ code: 'USER_GESTURE_REQUIRED', message: '浏览器需要点击播放后才能输出声音。' });
       } else if (this.options.mode === 'auto' && this.engine?.name === 'native') {
-        await this._runtimeFallback(errorDetail(error)); await this.engine.play(); this._setState('playing'); return;
+        await this._runtimeFallback(errorDetail(error));
+        if (generation !== this.generation || this.destroyed) throw abortError();
+        if (this._desiredPlaying) { await this.engine.play(); this._setState('playing'); }
+        return;
       } else { this.emit('error', errorDetail(error)); }
       throw error;
     }
   }
   async pause() {
-    this._assertLive(); ++this.transportIntent;
+    this._assertLive(); const intent = ++this.transportIntent; this._desiredPlaying = false;
     const engine = this.engine;
     if (!engine) return;
     await engine.pause();
-    if (!this.destroyed && this.engine === engine) this._setState('paused');
+    if (!this.destroyed && this.engine === engine && intent === this.transportIntent) this._setState('paused');
   }
   seek(seconds) {
     this._assertLive();

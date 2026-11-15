@@ -356,8 +356,8 @@ async function togglePlay() {
   if (!loaded || !player) return;
   try {
     if (player.paused) { await player.play(); setPlaying(true); }
-    else { player.pause(); setPlaying(false); if (benchmark) finishBenchmark('paused'); }
-  } catch (error) { showNotice(error.message, 'error'); }
+    else { await player.pause(); setPlaying(false); if (benchmark) finishBenchmark('paused'); }
+  } catch (error) { if (error.name !== 'AbortError') showNotice(error.message, 'error'); }
 }
 elements['play-pause'].addEventListener('click', togglePlay);
 elements['drop-zone'].addEventListener('keydown', (event) => {

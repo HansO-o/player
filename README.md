@@ -41,6 +41,7 @@ npm run preview
     renderer: 'auto',            // auto | webgl | webgpu
     performance: 'balanced',     // balanced | max
     bufferTarget: 1.5,           // 压缩包预读秒数，范围 0.25–8
+    fetchTimeoutMs: 15000,       // 兼容引擎的媒体响应 / 无数据读取超时
   });
 
   player.on('error', ({ message }) => console.error(message));
@@ -75,6 +76,8 @@ npm run preview
 2. **兼容路径**：原生容器/音视频编码不支持、加载超时或中途解码失败时，保留播放位置和音量，切换到 libmedia。其可使用 MSE、WebCodecs 硬件优先配置及 WASM 回退。
 3. **强制软解**：`mode: 'wasm'` 禁用 MSE 和 WebCodecs。测试会核对真实解码器，不允许自动退回 MSE 伪装成软解。没有可用 GPU 渲染上下文时明确报错。
 4. **独立音频管线**：AAC、Opus 等音频独立解码，通过 Web Audio / AudioWorklet 输出，以音频时钟同步视频，避免视频压力让主线程直接堵住音频回调。
+
+换源或销毁时会中止正在进行的媒体 IO；Fetch 等待响应头和无数据的流读取均有超时限制。此范围是媒体文件请求，浏览器的 ES Module 加载和 WASM 资源编译不宣称支持同一取消机制。
 
 软解内核包含 SIMD / 标量变体、Worker、SharedArrayBuffer、多线程、OffscreenCanvas 和 WebGL / WebGPU 渲染。WebGPU 在这里主要负责 YUV 转色、缩放与显示，**不等于把 HEVC/AV1 整个解码过程搬到 GPU**。
 
