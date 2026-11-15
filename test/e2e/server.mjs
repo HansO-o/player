@@ -1,12 +1,14 @@
 /** Local E2E server: deterministic native ESM, byte ranges and isolation headers. */
 import { createServer } from 'node:http';
 import { createReadStream } from 'node:fs';
-import { stat, realpath } from 'node:fs/promises';
+import { stat, realpath, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const repository = await realpath(fileURLToPath(new URL('../../', import.meta.url)));
 const publicDirectory = path.join(repository, 'public');
+const stalledMedia = await readFile(path.join(publicDirectory, 'fixtures/tone-aac.m4a'));
+const networkRequests = new Map();
 const port = Number(process.env.PORT || 4173);
 const types = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -50,9 +52,41 @@ const server = createServer(async (request, response) => {
     return;
   }
   try {
-    const pathname = decodeURIComponent(new URL(request.url, `http://127.0.0.1:${port}`).pathname);
+    const url = new URL(request.url, `http://127.0.0.1:${port}`);
+    const pathname = decodeURIComponent(url.pathname);
     if (pathname.includes('\0') || pathname.includes('\\') || pathname.split('/').includes('..')) {
       response.writeHead(400).end('Invalid path');
+      return;
+    }
+    // Real HTTP fault fixtures, not mocked fetch/decoder APIs. Each test has its
+    // own id so it can prove the server observed cancellation of the old load.
+    if (pathname.startsWith('/test/e2e/network/')) {
+      const id = url.searchParams.get('id') || '';
+      const mode = pathname.split('/').pop();
+      if (!/^[a-z0-9-]{1,100}$/i.test(id) || !['headers', 'get-headers', 'body', 'status'].includes(mode)) {
+        response.writeHead(400).end('Invalid network fixture');
+        return;
+      }
+      if (mode === 'status') {
+        response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(networkRequests.get(id) || { opened: 0, closed: 0, active: 0 }));
+        return;
+      }
+      if (mode !== 'headers' && request.method === 'HEAD') {
+        response.writeHead(200, { 'Content-Type': 'audio/mp4', 'Content-Length': String(stalledMedia.length), 'Accept-Ranges': 'bytes' }).end();
+        return;
+      }
+      const entry = networkRequests.get(id) || { opened: 0, closed: 0, active: 0, methods: [], firstByteSent: false };
+      entry.opened++; entry.active++; entry.methods.push(request.method);
+      networkRequests.set(id, entry);
+      response.once('close', () => { entry.closed++; entry.active--; });
+      if (mode === 'body') {
+        response.writeHead(200, { 'Content-Type': 'audio/mp4', 'Content-Length': String(stalledMedia.length), 'Accept-Ranges': 'bytes' });
+        response.flushHeaders();
+        response.write(stalledMedia.subarray(0, 16));
+        entry.firstByteSent = true;
+      }
+      // Deliberately neither end the response nor schedule data. The client
+      // must abort, replace the source, destroy, or enforce its own timeout.
       return;
     }
     let target;
@@ -97,4 +131,7 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(port, '127.0.0.1', () => process.stdout.write(`Octo Player test server: http://127.0.0.1:${port}\n`));
-for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => server.close(() => process.exit(0)));
+for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => {
+  server.close(() => process.exit(0));
+  server.closeAllConnections();
+});

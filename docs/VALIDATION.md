@@ -45,12 +45,33 @@ PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium npm run test:e2e -- --proj
 | 缺少跨源隔离 | 删除顶层 COOP/COEP 后实际解码 HEVC 和输出音频 |
 | 纯音频缺少跨源隔离 | 无共享内存时 AAC 仍走 WASM 并输出非零 PCM |
 | 错误资源 | 不存在的媒体地址返回错误，不报告播放成功 |
+| HTTP 挂起和超时 | 分别模拟 HEAD 无响应头、GET 无响应头、GET 部分 body 后停止；验证 destroy/换源会关闭连接并拒绝旧 load，空闲超时返回 TimeoutError |
 
 音频测试在原有 Web Audio 图上添加静音分析分支；原输出链路不变，
 通过 `AnalyserNode` 读取非零 PCM。它验证音频确实走到输出图，
 不等于人工听音或物理扬声器质量测试。
 
 ## 环境与结果
+
+### 第一轮完整 CI
+
+[GitHub Actions 运行 43730697718](https://github.com/HansO-o/player/actions/runs/43730697718)
+在 Ubuntu 24.04、软件 Mesa 图形及 PulseAudio 输出环境运行了每个浏览器
+14 项真实播放测试，保留视频截图变化与非零 PCM 断言。
+
+| CI 浏览器 | 实际结果 | 发现及后续 |
+| --- | --- | --- |
+| Chrome for Testing 159.0.8154.6（Playwright Chromium v1255） | 13/14 通过 | HEVC/AV1/Main 10 的真实 WASM 图像与音频验证通过；File 测试把本地 `blob:` Worker URL 错算成外部网络请求，已修正为只检查 HTTP(S) |
+| Firefox 159.0（Playwright Firefox v1572） | **14/14 通过** | 包含真实 WASM 视频、AAC/Opus PCM、跳转、无跨源隔离、线程 RPC、原生路径和自动回退 |
+| Playwright WebKit 27.2 | 8/14 通过 | Worker 图形上下文为空，出现 `null.createShader`，6 个视频输出测试失败；已加入真实 Worker WebGL 探测与主线程 GPU 渲染回退，等待后续 CI 复核 |
+
+这轮 CI 证明 Firefox 的完整功能路径及 Chromium 的实际音视频解码工作，
+**不能据此宣布 WebKit 视频问题已验证修复**。后续测试进一步要求跳转后
+视频渲染计数持续增加，避免只有音频推进也算跳转成功。每项的
+`PLAYBACK_EVIDENCE` 日志和 JSON 附件保留解码器、渲染器、线程数、音频状态、
+真实 PCM 峰值及输出帧计数。
+
+### 本地宿主补充记录
 
 本地功能验证日期：**2026-11-15**。测试宿主为 Linux；设备预设中的
 User-Agent 可显示 Windows/macOS，这不是实际硬件信息。
@@ -59,6 +80,7 @@ User-Agent 可显示 Windows/macOS，这不是实际硬件信息。
 | --- | --- |
 | Node 24.22.1 / FFmpeg 7.1.5 | 6 个素材的字节数和 SHA-256 校验通过，合计 658,699 字节 |
 | Firefox 159.0 / Playwright 1.65.1 | 4 项通过：原生暂停/跳转/恢复；原生路径不加载 WASM；原生失败后回退引擎继续播放；404 资源拒绝 |
+| Firefox 159.0 / 真实 HTTP 挂起回归 | **9/9 通过（13.9 秒）**：HEAD 无响应头、GET 无响应头、GET 部分 body 后停住，各自验证销毁、换源、超时；服务端确认旧请求连接关闭 |
 | Firefox 159.0 的 WASM 视频路径 | 当前宿主无法创建 WebGL/WebGL2 上下文，即使启用软件渲染设置也报 `FEATURE_FAILURE_WEBGL_EXHAUSTED_DRIVERS`；完整视频软解输出未验证 |
 | Firefox 159.0 的 Web Audio 输出 | 独立于播放器的 AudioContext + Oscillator 控制实验也停在 suspended、时间 0；本地宿主无法验证 PCM 输出 |
 | 系统 Chromium 156.0.8078.79 | 浏览器启动前被执行宿主禁止本地进程 socket，未进入页面；不能视为播放器测试通过或失败 |
@@ -71,12 +93,15 @@ User-Agent 可显示 Windows/macOS，这不是实际硬件信息。
 ```sh
 npm run test:e2e -- --project=firefox --grep 'native pause|native fast|auto recovers|HTTP errors'
 # 4 passed (9.4s)
+
+npm run test:e2e -- --project=firefox test/e2e/network.spec.js
+# 9 passed (13.9s)
 ```
 
 测试发现并推动修复了两个可观察问题：强制 WASM 不能静默转为 MSE；
 有音轨却未启动音频输出时不能报告播放成功。测试始终保留真实图像和
-非零 PCM 断言，不因本地环境缺失而跳过这些验收条件。完整套件应在
-具备可用图形和音频输出环境的 CI/真实设备上继续运行，并以其报告更新结果。
+非零 PCM 断言，不因本地环境缺失而跳过这些验收条件。本地受限路径已经
+转到上文的 CI 验证；未通过的路径继续根据后续 CI/真实设备报告更新结果。
 
 Playwright WebKit 即使通过，也不能代替真实 macOS/iOS Safari 的验证。
 
