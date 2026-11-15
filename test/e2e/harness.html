@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Octo Player playback integration harness</title>
+    <style>
+      body { margin: 16px; background: #101015; color: white; font: 16px sans-serif; }
+      #stage { width: 640px; height: 360px; position: relative; background: #000; overflow: hidden; }
+      #stage > video, #stage > canvas { width: 100%; height: 100%; object-fit: contain; }
+      button { margin-top: 12px; padding: 10px 24px; }
+    </style>
+  </head>
+  <body>
+    <div id="stage"></div>
+    <button id="play" type="button">Play with user gesture</button>
+    <script type="module">
+      import { OctoPlayer } from '/src/index.js';
+      window.__events = [];
+      window.createPlayer = async options => {
+        await window.player?.destroy();
+        window.__events = [];
+        window.player = new OctoPlayer({ container: document.querySelector('#stage'), assetBase: '/vendor/libmedia/', ...options });
+        for (const event of ['error', 'warning', 'enginechange', 'metadata', 'statechange', 'ended']) {
+          window.player.on(event, detail => window.__events.push({ event, detail }));
+        }
+        return true;
+      };
+      document.querySelector('#play').addEventListener('click', () => {
+        window.__playPromise = window.player.play();
+      });
+      window.__ready = true;
+    </script>
+  </body>
+</html>

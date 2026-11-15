@@ -1,0 +1,114 @@
+{
+  "description": "Original procedural moving test pattern with a 440 Hz sine wave. Functional fixtures; not performance benchmarks.",
+  "license": "CC0-1.0",
+  "generator": "ffmpeg version 7.1.5-0+deb13u1 Copyright (c) 2000-2026 the FFmpeg developers",
+  "regenerate": "npm run fixtures",
+  "fixtures": [
+    {
+      "file": "hevc-aac.mp4",
+      "bytes": 144705,
+      "sha256": "09dcfbf7a9a72f95763df04ece627a83f5c08a2f644c5a0b29516c725cbcd437",
+      "video": {
+        "codec": "hevc",
+        "profile": "Main",
+        "pixelFormat": "yuv420p",
+        "width": 320,
+        "height": 180,
+        "frameRate": "24/1"
+      },
+      "audio": {
+        "codec": "aac",
+        "sampleRate": 48000,
+        "channels": 2,
+        "signalHz": 440
+      },
+      "duration": 5
+    },
+    {
+      "file": "av1-opus.webm",
+      "bytes": 121986,
+      "sha256": "c677d6f83ec7e3367c6fca3889b7664f85e61e54a4272347743d8c969bcacf9c",
+      "video": {
+        "codec": "av1",
+        "profile": "Main",
+        "pixelFormat": "yuv420p",
+        "width": 320,
+        "height": 180,
+        "frameRate": "24/1"
+      },
+      "audio": {
+        "codec": "opus",
+        "sampleRate": 48000,
+        "channels": 2,
+        "signalHz": 440
+      },
+      "duration": 5.008
+    },
+    {
+      "file": "hevc10-aac.mp4",
+      "bytes": 144309,
+      "sha256": "0e39a8c5df638f6a37bd0caf881bb22af299bf41f35b749ca9c4f973e7cdb80e",
+      "video": {
+        "codec": "hevc",
+        "profile": "Main 10",
+        "pixelFormat": "yuv420p10le",
+        "width": 320,
+        "height": 180,
+        "frameRate": "24/1"
+      },
+      "audio": {
+        "codec": "aac",
+        "sampleRate": 48000,
+        "channels": 2,
+        "signalHz": 440
+      },
+      "duration": 5
+    },
+    {
+      "file": "h264-aac.mp4",
+      "bytes": 155969,
+      "sha256": "ff2910cea236dbbbaaab3b8c29207be8c892036419f404ebd5581c85022e0a53",
+      "video": {
+        "codec": "h264",
+        "profile": "High",
+        "pixelFormat": "yuv420p",
+        "width": 320,
+        "height": 180,
+        "frameRate": "24/1"
+      },
+      "audio": {
+        "codec": "aac",
+        "sampleRate": 48000,
+        "channels": 2,
+        "signalHz": 440
+      },
+      "duration": 5
+    },
+    {
+      "file": "tone-aac.m4a",
+      "bytes": 42149,
+      "sha256": "9c2b79d6e776fa75bc1c00985beead63dfde0fe1fd430d6780108ba63003a4a9",
+      "video": null,
+      "audio": {
+        "codec": "aac",
+        "sampleRate": 48000,
+        "channels": 2,
+        "signalHz": 440
+      },
+      "duration": 5
+    },
+    {
+      "file": "tone-opus.ogg",
+      "bytes": 49581,
+      "sha256": "bdf492b4bf0445d4b6a4ede87365108fa205e142af46879add1d28787125f2d0",
+      "video": null,
+      "audio": {
+        "codec": "opus",
+        "sampleRate": 48000,
+        "channels": 2,
+        "signalHz": 440
+      },
+      "duration": 5.0065
+    }
+  ]
+}

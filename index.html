@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#111311" />
+    <meta name="description" content="Octo Player — 原生播放优先，WASM 音视频解码兜底。打开本地 H.265、AV1 视频，查看真实播放表现。" />
+    <title>Octo Player · H.265 / AV1</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='14' fill='%23d6f78a'/%3E%3Cpath d='m19 13 17 11-17 11Z' fill='%23111311'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="./demo/style.css" />
+    <script type="module" src="./demo/main.js"></script>
+  </head>
+  <body>
+    <svg class="icon-definitions" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+      <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7Z" /></symbol>
+      <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14" /></symbol>
+      <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Z" /><path d="M14 3v6h6M8 14h8M8 17h5" /></symbol>
+      <symbol id="i-volume" viewBox="0 0 24 24"><path d="m11 4-6 5H2v6h3l6 5ZM15 8a6 6 0 0 1 0 8M18 5a10 10 0 0 1 0 14" /></symbol>
+      <symbol id="i-muted" viewBox="0 0 24 24"><path d="m11 4-6 5H2v6h3l6 5ZM16 9l6 6m0-6-6 6" /></symbol>
+      <symbol id="i-expand" viewBox="0 0 24 24"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5" /></symbol>
+      <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h16m-6-6 6 6-6 6" /></symbol>
+      <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5" /></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4 10-10" /></symbol>
+      <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7v.1" /></symbol>
+      <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" /></symbol>
+    </svg>
+
+    <header class="site-header">
+      <a class="brand" href="./" aria-label="Octo Player 首页">
+        <span class="brand-mark"><svg class="icon"><use href="#i-play" /></svg></span>
+        <span>octo<span class="brand-light">player</span></span>
+      </a>
+      <nav class="header-nav" aria-label="页面导航">
+        <a class="active" href="#workspace">播放器</a>
+        <a href="#diagnostics">诊断</a>
+        <a href="https://github.com/HansO-o/player" target="_blank" rel="noreferrer">GitHub <span aria-hidden="true">↗</span></a>
+      </nav>
+      <span class="header-tag">H.265 <span>+</span> AV1</span>
+    </header>
+
+    <main>
+      <section class="intro" aria-labelledby="page-title">
+        <div>
+          <div class="eyebrow"><span class="small-line"></span> A BETTER WAY TO PLAY</div>
+          <h1 id="page-title">让视频，顺畅发生<span>。</span></h1>
+          <p>原生播放优先，WASM 软解兜底。视频与声音，一起到位。</p>
+        </div>
+        <div class="environment-summary"><span class="status-dot neutral" id="environment-dot"></span><span id="environment-summary">正在检查播放环境</span></div>
+      </section>
+
+      <section class="workspace" id="workspace" aria-label="视频播放工作区">
+        <div class="view-column">
+          <div class="player-shell" id="player-shell">
+            <div class="surface-wrap" id="drop-zone" tabindex="0" aria-label="视频区域，可拖入视频文件">
+              <div id="player-surface" class="player-surface"></div>
+              <div class="empty-state" id="empty-state">
+                <div class="ambient-orbit orbit-one"></div><div class="ambient-orbit orbit-two"></div>
+                <div class="empty-content">
+                  <span class="empty-emblem"><svg class="icon"><use href="#i-play" /></svg></span>
+                  <h2>你的视频，即刻开场</h2>
+                  <p>将文件拖到这里，或从设备中打开</p>
+                  <button class="button button-accent" id="open-file"><svg class="icon"><use href="#i-file" /></svg>打开视频</button>
+                  <span class="format-hint">MP4 · MKV · WEBM · MOV</span>
+                </div>
+              </div>
+              <div class="drop-overlay" aria-hidden="true"><svg class="icon"><use href="#i-file" /></svg>松开，开始播放</div>
+              <div class="video-badges" id="video-badges" hidden><span id="engine-badge">准备中</span><span id="resolution-badge" hidden></span></div>
+              <div class="video-loading" id="video-loading" hidden><span class="spinner"></span><span id="loading-label">正在读取视频</span></div>
+            </div>
+            <div class="player-controls" id="player-controls">
+              <input id="seek" class="seek-range" type="range" min="0" max="100" step="0.05" value="0" aria-label="播放进度" disabled />
+              <div class="controls-row">
+                <button class="icon-button play-button" id="play-pause" aria-label="播放" disabled><svg class="icon"><use href="#i-play" /></svg></button>
+                <span class="time-display"><span id="current-time">0:00</span><span class="time-divider">/</span><span id="duration">0:00</span></span>
+                <div class="controls-spacer"></div>
+                <button class="icon-button" id="mute" aria-label="静音" aria-pressed="false"><svg class="icon"><use href="#i-volume" /></svg></button>
+                <input class="volume-range" id="volume" type="range" min="0" max="1" value="1" step="0.01" aria-label="音量" />
+                <select class="speed-select" id="speed" aria-label="播放速度"><option value="0.5">0.5×</option><option value="0.75">0.75×</option><option value="1" selected>1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select>
+                <button class="icon-button" id="fullscreen" aria-label="全屏"><svg class="icon"><use href="#i-expand" /></svg></button>
+              </div>
+            </div>
+          </div>
+
+          <div class="file-row"><div class="file-description"><svg class="icon"><use href="#i-file" /></svg><span id="file-name">尚未打开视频</span></div><span class="state-label" id="state-label">就绪</span><button id="change-file" class="text-button">更换文件</button></div>
+          <input type="file" id="file-input" accept="video/*,audio/*,.mkv,.hevc,.h265,.ivf,.m4v,.ts,.flv,.mov,.mp4,.webm,.aac,.flac,.opus" hidden />
+
+          <form class="url-form" id="url-form">
+            <label for="url-input" class="sr-only">视频链接</label>
+            <span class="url-prefix" aria-hidden="true">↗</span>
+            <input id="url-input" type="url" placeholder="或粘贴视频直链 https://…" autocomplete="off" spellcheck="false" required />
+            <button class="button button-subtle" type="submit">加载链接 <svg class="icon"><use href="#i-arrow" /></svg></button>
+          </form>
+
+          <div class="sample-row"><span>先试一下</span><button class="sample-button" data-sample="hevc-aac.mp4"><span class="sample-dot"></span>H.265 <span class="sample-audio">+ AAC</span><svg class="icon"><use href="#i-arrow" /></svg></button><button class="sample-button" data-sample="av1-opus.webm"><span class="sample-dot av1"></span>AV1 <span class="sample-audio">+ Opus</span><svg class="icon"><use href="#i-arrow" /></svg></button><span class="local-note">本地文件不会上传</span></div>
+          <div class="notice" id="notice" role="status" hidden><svg class="icon"><use href="#i-info" /></svg><span id="notice-text"></span><button class="icon-button" id="dismiss-notice" aria-label="关闭提示"><svg class="icon"><use href="#i-close" /></svg></button></div>
+        </div>
+
+        <aside class="settings-card" aria-labelledby="settings-title">
+          <div class="card-header"><h2 id="settings-title">播放引擎</h2><span class="live-label"><span class="status-dot neutral" id="live-dot"></span><span id="live-label">待播放</span></span></div>
+          <label class="field-label" for="mode">解码模式</label>
+          <select id="mode" class="setting-select"><option value="auto">自动 · 原生优先</option><option value="native">仅原生播放</option><option value="wasm">强制 WASM 软解</option></select>
+          <p class="field-hint" id="mode-hint">浏览器可以播放时使用原生通道，失败后自动回退。</p>
+          <div class="settings-grid"><div><label class="field-label" for="renderer">软解画面渲染</label><select id="renderer" class="setting-select"><option value="auto">自动选择</option><option value="webgpu">WebGPU</option><option value="webgl">WebGL</option></select></div><div><label class="field-label" for="performance">线程策略</label><select id="performance" class="setting-select"><option value="balanced">均衡</option><option value="max">最大并行</option></select></div></div>
+          <p class="field-hint secondary-hint">引擎设置变更后重新加载当前视频。</p>
+          <div class="card-divider"></div>
+          <div class="stats-heading"><h3>实时表现</h3><span class="mono" id="stats-source">等待数据</span></div>
+          <div class="primary-stat"><span class="stat-number" id="stat-fps">—</span><div><span>FPS</span><span class="stat-caption">实际呈现帧率</span></div><svg class="sparkline" viewBox="0 0 120 38" aria-label="最近帧率趋势" role="img"><path id="fps-sparkline" d="M0 32H120" /></svg></div>
+          <dl class="metrics-grid"><div><dt>视频缓冲</dt><dd><span id="stat-buffer">—</span><small>s</small></dd></div><div><dt>音画偏差</dt><dd><span id="stat-drift">—</span><small>ms</small></dd></div><div><dt>丢弃帧</dt><dd id="stat-dropped">—</dd></div><div><dt>解码线程</dt><dd id="stat-threads">—</dd></div></dl>
+          <div class="metric-footnote" id="metric-footnote">未提供的指标显示「—」，不推测硬解状态。</div>
+          <div class="card-divider"></div>
+          <div class="benchmark-heading"><h3>记录播放表现</h3><select id="benchmark-duration" aria-label="性能记录时长"><option value="10">10 秒</option><option value="30" selected>30 秒</option></select></div>
+          <button class="button benchmark-button" id="benchmark-button" disabled><span class="record-dot"></span><span id="benchmark-label">开始记录</span><svg class="icon"><use href="#i-arrow" /></svg></button>
+          <div class="benchmark-progress" id="benchmark-progress" hidden><span></span></div>
+          <p class="field-hint benchmark-hint" id="benchmark-hint">记录当前设备上的真实表现，可导出 JSON。</p>
+        </aside>
+      </section>
+
+      <section class="environment-card" aria-labelledby="environment-title">
+        <div class="environment-title"><span class="tiny-square"></span><h2 id="environment-title">当前环境</h2></div>
+        <div class="capability-list" id="capability-list"><span class="capability-chip">检测中…</span></div>
+        <button class="text-button" id="export-report"><svg class="icon"><use href="#i-download" /></svg>导出诊断</button>
+      </section>
+
+      <details class="diagnostics" id="diagnostics">
+        <summary><span><svg class="icon"><use href="#i-info" /></svg>诊断与事件</span><span class="details-hint">查看实际播放路径、能力和错误 <span class="chevron">⌄</span></span></summary>
+        <div class="diagnostics-body"><p>原生通道的硬解选择由浏览器决定；能力检测只代表可用性。WASM 表现受设备、编码参数与温度影响。WebGPU 用于画面渲染，并不代表 GPU 解码。</p><div class="diagnostics-columns"><div><h3>运行状态</h3><pre id="diagnostic-json">等待初始化</pre></div><div><h3>事件记录</h3><ol id="event-log" class="event-log"><li>打开一个视频，开始查看播放事件。</li></ol></div></div></div>
+      </details>
+
+      <footer class="site-footer"><span>OCTO PLAYER <span class="footer-dot">·</span> OPEN SOURCE PLAYBACK</span><span>原生 → WebCodecs / WASM <span class="footer-dot">·</span> 按能力选择</span></footer>
+    </main>
+  </body>
+</html>
