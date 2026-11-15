@@ -1,0 +1,10 @@
+node_modules/
+dist/
+public/vendor/
+.cache/
+test-results/
+playwright-report/
+.wrangler/
+*.log
+.env*
+!.env.example
